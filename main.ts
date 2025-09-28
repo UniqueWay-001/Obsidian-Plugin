@@ -45,9 +45,9 @@ export default class GeometryPlugin extends Plugin {
 
 
 		this.addRibbonIcon('lock', 'Toggle Canvas Drag', () => {
-    this.locked = !this.locked;
-    new Notice(`Canvas drag is now ${this.locked ? 'locked' : 'unlocked'}`);
-});
+			this.locked = !this.locked;
+			new Notice(`Canvas drag is now ${this.locked ? 'locked' : 'unlocked'}`);
+		});
 
 
 		this.addCommand({
@@ -57,31 +57,45 @@ export default class GeometryPlugin extends Plugin {
 		});
 
 		this.registerMarkdownPostProcessor((el, ctx) => {
-			const blocks = el.querySelectorAll('pre > code.language-geometry');
-			blocks.forEach(block => {
-				const pre = block.parentElement;
-				if (!pre) return;
+		const blocks = el.querySelectorAll('pre > code.language-geometry');
+		blocks.forEach(block => {
+			const pre = block.parentElement;
+			if (!pre) return;
 
-				const wrapper = document.createElement('div');
-				wrapper.classList.add('geometry-wrapper');
+			const wrapper = document.createElement('div');
+			wrapper.classList.add('geometry-wrapper');
 
-				const canvas = document.createElement('canvas');
-				canvas.width = 500;
-				canvas.height = 500;
-				canvas.classList.add('geometry-canvas');
-				wrapper.appendChild(canvas);
+			const canvas = document.createElement('canvas');
 
-				pre.parentElement?.insertBefore(wrapper, pre.nextSibling);
-				pre.style.display = 'none';
+			// default size
+			let width = 500;
+			let height = 500;
 
-				const objects = this.parseGeometryCode(block.textContent || '');
-				this.objectsMap.set(canvas, objects);
+			// check for canvas size in code block (first line like: #canvas 800 600)
+			const firstLine = (block.textContent || '').split('\n')[0].trim();
+			const sizeMatch = firstLine.match(/^#canvas\s+(\d+)\s+(\d+)/);
+			if (sizeMatch) {
+				width = parseInt(sizeMatch[1]);
+				height = parseInt(sizeMatch[2]);
+			}
 
-				this.renderCanvas(canvas, objects);
-				this.enableDrag(canvas, objects);
-			});
+			canvas.width = width;
+			canvas.height = height;
+			canvas.classList.add('geometry-canvas');
+			wrapper.appendChild(canvas);
+
+			pre.parentElement?.insertBefore(wrapper, pre.nextSibling);
+			pre.style.display = 'none';
+
+			const objects = this.parseGeometryCode(block.textContent || '');
+			this.objectsMap.set(canvas, objects);
+
+			this.renderCanvas(canvas, objects);
+			this.enableDrag(canvas, objects);
 		});
-	}
+	});
+}
+
 
 	onunload() {
 		console.log('Geometry Plugin Unloaded');
