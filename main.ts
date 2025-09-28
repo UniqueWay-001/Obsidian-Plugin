@@ -1,134 +1,443 @@
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
 
-// Remember to rename these classes and interfaces!
 
-interface MyPluginSettings {
-	mySetting: string;
+interface GeometricObject {
+	id: string;
+	type:
+		| 'point'
+		| 'line'
+		| 'segment'
+		| 'ray'
+		| 'midpoint'
+		| 'bisector'
+		| 'angle'
+		| 'plane'
+		| 'circle';
+	values: Record<string, number>;
+	startId?: string;
+	endId?: string;
+	centerId?: string;
+	pointId?: string;
+	vertexId?: string;
+	p1Id?: string;
+	p2Id?: string;
+	otherIds?: string[];
 }
 
-const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
-}
-
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+export default class GeometryPlugin extends Plugin {
+	private objectsMap: Map<HTMLCanvasElement, GeometricObject[]> = new Map();
+	private locked = false; //LOCK
 
 	async onload() {
-		await this.loadSettings();
+		console.log('🎉 Geometry Plugin Loaded!');
 
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (_evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass('my-plugin-ribbon-class');
+    // Load CSS from plugin folder
+		const cssLink = document.createElement('link');
+		cssLink.rel = 'stylesheet';
+		cssLink.type = 'text/css';
+		cssLink.href = this.manifest.dir + '/styles.css';
+		document.head.appendChild(cssLink);
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status Bar Text');
+		console.log('🎨 Geometry Plugin CSS loaded!');
 
-		// This adds a simple command that can be triggered anywhere
+
+
+		this.addRibbonIcon('lock', 'Toggle Canvas Drag', () => {
+    this.locked = !this.locked;
+    new Notice(`Canvas drag is now ${this.locked ? 'locked' : 'unlocked'}`);
+});
+
+
 		this.addCommand({
-			id: 'open-sample-modal-simple',
-			name: 'Open sample modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'sample-editor-command',
-			name: 'Sample editor command',
-			editorCallback: (editor: Editor, _view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection('Sample Editor Command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-sample-modal-complex',
-			name: 'Open sample modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
-
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-			}
+			id: 'open-geometry-panel',
+			name: 'Open Geometry Panel',
+			callback: () => console.log('Command triggered: Open Geometry Panel'),
 		});
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
+		this.registerMarkdownPostProcessor((el, ctx) => {
+			const blocks = el.querySelectorAll('pre > code.language-geometry');
+			blocks.forEach(block => {
+				const pre = block.parentElement;
+				if (!pre) return;
 
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			console.log('click', evt);
+				const wrapper = document.createElement('div');
+				wrapper.classList.add('geometry-wrapper');
+
+				const canvas = document.createElement('canvas');
+				canvas.width = 500;
+				canvas.height = 500;
+				canvas.classList.add('geometry-canvas');
+				wrapper.appendChild(canvas);
+
+				pre.parentElement?.insertBefore(wrapper, pre.nextSibling);
+				pre.style.display = 'none';
+
+				const objects = this.parseGeometryCode(block.textContent || '');
+				this.objectsMap.set(canvas, objects);
+
+				this.renderCanvas(canvas, objects);
+				this.enableDrag(canvas, objects);
+			});
 		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
 	}
 
 	onunload() {
-
+		console.log('Geometry Plugin Unloaded');
 	}
 
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-	}
+private parseGeometryCode(code: string): GeometricObject[] {
+	const objects: GeometricObject[] = [];
+	const lines = code.split('\n');
 
-	async saveSettings() {
-		await this.saveData(this.settings);
-	}
+	lines.forEach(line => {
+		line = line.trim();
+		if (!line) return;
+
+		// --- Point ---
+		if (line.startsWith('Point')) {
+			const match = line.match(/Point\s+(\w+)\s*\((\d+),\s*(\d+)\)/);
+			if (match) {
+				const [, id, x, y] = match;
+				objects.push({
+					id,
+					type: 'point',
+					values: { x: parseInt(x), y: parseInt(y) }
+				});
+			}
+		}
+
+		// --- Line / Segment / Ray ---
+		if (line.startsWith('Line') || line.startsWith('Segment') || line.startsWith('Ray')) {
+			const match = line.match(/(Line|Segment|Ray)\s+(\w+)\s+(\w+)\s+(\w+)/);
+			if (match) {
+				const [, type, id, start, end] = match;
+				const startObj = objects.find(o => o.id === start);
+				const endObj = objects.find(o => o.id === end);
+				if (startObj && endObj) {
+					objects.push({
+						id,
+						type: type.toLowerCase() as 'line' | 'segment' | 'ray',
+						startId: start,
+						endId: end,
+						values: {
+							x1: startObj.values.x,
+							y1: startObj.values.y,
+							x2: endObj.values.x,
+							y2: endObj.values.y
+						}
+					});
+				}
+			}
+		}
+
+		// --- Midpoint ---
+		if (line.startsWith('Midpoint')) {
+			const match = line.match(/Midpoint\s+(\w+)\s+(\w+)\s+(\w+)/);
+			if (match) {
+				const [, id, p1Id, p2Id] = match;
+				const p1 = objects.find(o => o.id === p1Id);
+				const p2 = objects.find(o => o.id === p2Id);
+				if (p1 && p2) {
+					objects.push({
+						id,
+						type: 'midpoint',
+						values: {}, // computed dynamically in renderCanvas
+						startId: p1Id,
+						endId: p2Id
+					});
+				}
+			}
+		}
+
+		// --- Bisector ---
+		if (line.startsWith('Bisector')) {
+			const match = line.match(/Bisector\s+(\w+)\s+(\w+)\s+(\w+)/);
+			if (match) {
+				const [, id, p1Id, p2Id] = match;
+				const p1 = objects.find(o => o.id === p1Id);
+				const p2 = objects.find(o => o.id === p2Id);
+				if (p1 && p2) {
+					objects.push({
+						id,
+						type: 'bisector',
+						values: {},
+						startId: p1Id,
+						endId: p2Id
+					});
+				}
+			}
+		}
+
+		// --- Circle ---
+		if (line.startsWith('Circle')) {
+			const match = line.match(/Circle\s+(\w+)\s+(\w+)\s+(\w+)/);
+			if (match) {
+				const [, id, centerId, pointId] = match;
+				const center = objects.find(o => o.id === centerId);
+				const pt = objects.find(o => o.id === pointId);
+				if (center && pt) {
+					objects.push({
+						id,
+						type: 'circle',
+						values: {}, // radius computed in renderCanvas
+						centerId,
+						pointId
+					});
+				}
+			}
+		}
+
+		// --- Angle ---
+		if (line.startsWith('Angle')) {
+			const match = line.match(/Angle\s+(\w+)\s+(\w+)\s+(\w+)\s+(\w+)/);
+			if (match) {
+				const [, id, vertexId, p1Id, p2Id] = match;
+				const vertex = objects.find(o => o.id === vertexId);
+				const p1 = objects.find(o => o.id === p1Id);
+				const p2 = objects.find(o => o.id === p2Id);
+				if (vertex && p1 && p2) {
+					objects.push({
+						id,
+						type: 'angle',
+						values: {},
+						vertexId,
+						p1Id,
+						p2Id
+					});
+				}
+			}
+		}
+
+	});
+
+	return objects;
 }
 
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
 
-	onOpen() {
-		const {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
 
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
-	}
+	// ---------------------- RENDER ----------------------
+private renderCanvas(canvas: HTMLCanvasElement, objects: GeometricObject[]) {
+	const ctx = canvas.getContext('2d');
+	if (!ctx) return;
+	ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+	// Helper: draw arrow
+const drawArrow = (x1: number, y1: number, x2: number, y2: number) => {
+	const dx = x2 - x1;
+	const dy = y2 - y1;
+	const len = Math.hypot(dx, dy);
+	if (len === 0) return;
+	const ux = dx / len, uy = dy / len;
+
+	// shorten by 40px (was 20 before)
+	const tipX = x2 + ux * 10;
+	const tipY = y2 + uy * 10;
+
+	// arrowhead size
+	const size = 8;
+
+	ctx.beginPath();
+	ctx.moveTo(tipX, tipY);
+	ctx.lineTo(tipX - uy * size - ux * size, tipY + ux * size - uy * size);
+	ctx.lineTo(tipX + uy * size - ux * size, tipY - ux * size - uy * size);
+	ctx.closePath();
+	ctx.fillStyle = ctx.strokeStyle;
+	ctx.fill();
+};
+
+
+	objects.forEach(obj => {
+		// --- Lines, Segments, Rays, Bisectors ---
+		if (['line', 'segment', 'ray', 'bisector'].includes(obj.type)) {
+			const p1 = objects.find(o => o.id === obj.startId);
+			const p2 = objects.find(o => o.id === obj.endId);
+			if (!p1 || !p2) return;
+
+			let x1 = p1.values.x;
+			let y1 = p1.values.y;
+			let x2 = p2.values.x;
+			let y2 = p2.values.y;
+
+			if (obj.type === 'ray') {
+				const dx = x2 - x1;
+				const dy = y2 - y1;
+				const len = Math.hypot(dx, dy);
+				if (len === 0) return;
+				const ux = dx / len, uy = dy / len;
+				x2 = x1 + ux * 300;
+				y2 = y1 + uy * 300;
+			}
+
+			if (obj.type === 'bisector') {
+				const mx = (x1 + x2) / 2;
+				const my = (y1 + y2) / 2;
+				const dx = x2 - x1;
+				const dy = y2 - y1;
+				const len = Math.hypot(dx, dy);
+				if (len === 0) return;
+				const ux = -dy / len, uy = dx / len;
+				const halfLen = 100;
+				x1 = mx - ux * halfLen; 
+				y1 = my - uy * halfLen;
+				x2 = mx + ux * halfLen; 
+				y2 = my + uy * halfLen;
+			}
+
+			ctx.beginPath();
+			ctx.moveTo(x1, y1);
+			ctx.lineTo(x2, y2);
+			ctx.strokeStyle = obj.type === 'bisector' ? 'cyan' : 'white';
+			ctx.lineWidth = 2;
+			ctx.stroke();
+
+			// arrows
+			if (obj.type === 'line') {
+				drawArrow(x2, y2, x1, y1); // both ends
+				drawArrow(x1, y1, x2, y2);
+			}
+			if (obj.type === 'ray') {
+				drawArrow(x1, y1, x2, y2);
+			}
+		}
+		
+		// --- Angles ---
+		if (obj.type === 'angle') {
+			const vertex = objects.find(o => o.id === obj.vertexId);
+			const p1 = objects.find(o => o.id === obj.p1Id);
+			const p2 = objects.find(o => o.id === obj.p2Id);
+			if (!vertex || !p1 || !p2) return;
+
+			// Compute start/end angles
+			let startAngle = Math.atan2(p1.values.y - vertex.values.y, p1.values.x - vertex.values.x);
+			let endAngle = Math.atan2(p2.values.y - vertex.values.y, p2.values.x - vertex.values.x);
+
+			// Ensure smaller arc
+			let diff = endAngle - startAngle;
+			if (diff < 0) diff += 2 * Math.PI;
+			if (diff > Math.PI) [startAngle, endAngle] = [endAngle, startAngle + 2 * Math.PI];
+
+			// Draw the arc
+			const radius = 40;
+			ctx.beginPath();
+			ctx.arc(vertex.values.x, vertex.values.y, radius, startAngle, endAngle, false);
+			ctx.strokeStyle = 'purple';
+			ctx.lineWidth = 2;
+			ctx.stroke();
+
+			// Draw the measurement (in degrees)
+			const angleDeg = Math.round((endAngle - startAngle) * 180 / Math.PI);
+			const midAngle = (startAngle + endAngle) / 2;
+			const labelX = vertex.values.x + Math.cos(midAngle) * (radius + 15);
+			const labelY = vertex.values.y + Math.sin(midAngle) * (radius + 15);
+
+			ctx.font = '12px Arial';
+			ctx.fillStyle = 'white';
+			ctx.textAlign = 'center';
+			ctx.textBaseline = 'middle';
+			ctx.fillText(`${angleDeg}°`, labelX, labelY);
+		}
+
+
+		// --- Circle ---
+		if (obj.type === 'circle') {
+			const center = objects.find(o => o.id === obj.centerId);
+			const point = objects.find(o => o.id === obj.pointId);
+			if (!center || !point) return;
+			const dx = point.values.x - center.values.x;
+			const dy = point.values.y - center.values.y;
+			const r = Math.hypot(dx, dy);
+			ctx.beginPath();
+			ctx.arc(center.values.x, center.values.y, r, 0, Math.PI * 2);
+			ctx.strokeStyle = 'lime';
+			ctx.lineWidth = 2;
+			ctx.stroke();
+		}
+	});
+	 
+
+	// Compute dynamic values first
+	objects.forEach(obj => {
+		if (obj.type === 'midpoint') {
+			const p1 = objects.find(o => o.id === obj.startId);
+			const p2 = objects.find(o => o.id === obj.endId);
+			if (!p1 || !p2) return;
+			obj.values.x = (p1.values.x + p2.values.x) / 2;
+			obj.values.y = (p1.values.y + p2.values.y) / 2;
+		}
+	});
+
+	
+	// --- Points ---
+	objects.forEach(obj => {
+		if (obj.type === 'point') {
+			// Draw the point
+			ctx.beginPath();
+			ctx.arc(obj.values.x, obj.values.y, 5, 0, Math.PI * 2);
+			ctx.fillStyle = 'yellow';
+			ctx.fill();
+			ctx.strokeStyle = 'black';
+			ctx.lineWidth = 1;
+			ctx.stroke();
+
+			// Draw the label
+			ctx.font = '12px Arial';
+			ctx.fillStyle = 'white'; // label color
+			ctx.textAlign = 'left';
+			ctx.textBaseline = 'middle';
+			ctx.fillText(obj.id, obj.values.x + 8, obj.values.y);
+		}
+
+		if (obj.type === 'midpoint') {
+			ctx.beginPath();
+			ctx.arc(obj.values.x, obj.values.y, 5, 0, Math.PI * 2);
+			ctx.fillStyle = 'orange'; // differentiate midpoints
+			ctx.fill();
+			ctx.strokeStyle = 'black';
+			ctx.lineWidth = 1;
+			ctx.stroke();
+
+			ctx.font = '12px Arial';
+			ctx.fillStyle = 'white';
+			ctx.textAlign = 'left';
+			ctx.textBaseline = 'middle';
+			ctx.fillText(obj.id, obj.values.x + 8, obj.values.y);
+		}
+
+	});
+
 }
 
-class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
 
-	constructor(app: App, plugin: MyPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
-	}
 
-	display(): void {
-		const {containerEl} = this;
+	// ---------------------- ENABLE DRAG ----------------------
+	private enableDrag(canvas: HTMLCanvasElement, objects: GeometricObject[]) {
+    let draggingPoint: GeometricObject | null = null;
 
-		containerEl.empty();
+    canvas.addEventListener('mousedown', (e) => {
+        if (this.locked) return; // ❌ skip drag if locked
 
-		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
-				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
-					await this.plugin.saveSettings();
-				}));
-	}
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+
+        draggingPoint = objects.find(obj =>
+            obj.type === 'point' &&
+            Math.hypot(obj.values.x - x, obj.values.y - y) < 12
+        ) || null;
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+        if (!draggingPoint || this.locked) return;
+
+        const rect = canvas.getBoundingClientRect();
+        draggingPoint.values.x = e.clientX - rect.left;
+        draggingPoint.values.y = e.clientY - rect.top;
+
+        this.renderCanvas(canvas, objects);
+    });
+
+    canvas.addEventListener('mouseup', () => draggingPoint = null);
+    canvas.addEventListener('mouseleave', () => draggingPoint = null);
+}
+
 }
