@@ -12,7 +12,8 @@ interface GeometricObject {
 		| 'bisector'
 		| 'angle'
 		| 'plane'
-		| 'circle';
+		| 'circle'
+		| 'angleBisector'; // <-- add this
 	values: Record<string, number>;
 	startId?: string;
 	endId?: string;
@@ -23,6 +24,7 @@ interface GeometricObject {
 	p2Id?: string;
 	otherIds?: string[];
 }
+
 
 export default class GeometryPlugin extends Plugin {
 	private objectsMap: Map<HTMLCanvasElement, GeometricObject[]> = new Map();
@@ -208,6 +210,23 @@ private parseGeometryCode(code: string): GeometricObject[] {
 			}
 		}
 
+		// --- AngleBisector ---
+		if (line.startsWith('AngleBisector')) {
+			const match = line.match(/AngleBisector\s+(\w+)\s+(\w+)/);
+			if (match) {
+				const [, id, angleId] = match;
+				const angleObj = objects.find(o => o.id === angleId);
+				if (angleObj && angleObj.type === 'angle') {
+					objects.push({
+						id,
+						type: 'angleBisector',
+						values: {}, 
+						otherIds: [angleId] // store reference to angle
+					});
+				}
+			}
+		}
+
 	});
 
 	return objects;
@@ -335,6 +354,46 @@ const drawArrow = (x1: number, y1: number, x2: number, y2: number) => {
 			ctx.textAlign = 'center';
 			ctx.textBaseline = 'middle';
 			ctx.fillText(`${angleDeg}°`, labelX, labelY);
+		}
+
+		// --- Angle Bisector ---
+		if (obj.type === 'angleBisector') {
+			const angleObj = objects.find(o => o.id === obj.otherIds?.[0]);
+			if (!angleObj) return;
+
+			const vertex = objects.find(o => o.id === angleObj.vertexId);
+			const p1 = objects.find(o => o.id === angleObj.p1Id);
+			const p2 = objects.find(o => o.id === angleObj.p2Id);
+			if (!vertex || !p1 || !p2) return;
+
+			const dx1 = p1.values.x - vertex.values.x;
+			const dy1 = p1.values.y - vertex.values.y;
+			const dx2 = p2.values.x - vertex.values.x;
+			const dy2 = p2.values.y - vertex.values.y;
+
+			// Normalize vectors
+			const len1 = Math.hypot(dx1, dy1);
+			const len2 = Math.hypot(dx2, dy2);
+			const ux1 = dx1 / len1;
+			const uy1 = dy1 / len1;
+			const ux2 = dx2 / len2;
+			const uy2 = dy2 / len2;
+
+			// Angle bisector vector (unit)
+			const bisX = ux1 + ux2;
+			const bisY = uy1 + uy2;
+			const bisLen = Math.hypot(bisX, bisY);
+			if (bisLen === 0) return;
+			const bx = bisX / bisLen;
+			const by = bisY / bisLen;
+
+			const length = 100; // arbitrary line length
+			ctx.beginPath();
+			ctx.moveTo(vertex.values.x, vertex.values.y);
+			ctx.lineTo(vertex.values.x + bx * length, vertex.values.y + by * length);
+			ctx.strokeStyle = 'orange';
+			ctx.lineWidth = 2;
+			ctx.stroke();
 		}
 
 
