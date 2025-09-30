@@ -13,7 +13,7 @@ interface GeometricObject {
 		| 'angle'
 		| 'plane'
 		| 'circle'
-		| 'angleBisector'; // <-- add this
+		| 'angleBisector';
 	values: Record<string, number>;
 	startId?: string;
 	endId?: string;
