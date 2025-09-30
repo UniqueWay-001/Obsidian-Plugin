@@ -75,7 +75,3 @@ obsidian-geometry-plugin/
 Contributing
 
 Pull requests welcome! Open an issue to discuss ideas or features before contributing.
-
-License
-
-MIT License – see LICENSE
