@@ -114,54 +114,6 @@ private parseGeometryCode(code: string): GeometricObject[] {
 		line = line.trim();
 		if (!line) return;
 
-		// --- Transform ---
-		// --- Translation ---
-		if (line.startsWith('Translate')) {
-		const match = line.match(/Translate\s+(\w+)\s+(\w+)\s*\(([-]?\d+),\s*([-]?\d+)\)/);
-		if (match) {
-			const [, baseId, newId, dx, dy] = match;
-			objects.push({
-			id: newId,
-			type: 'transform',
-			baseId,
-			transformType: 'translation',
-			params: { dx: parseInt(dx), dy: parseInt(dy) },
-			values: {}
-			});
-		}
-		}
-		// --- Reflection ---
-		if (line.startsWith('Reflect')) {
-		const match = line.match(/Reflect\s+(\w+)\s+(\w+)\s+(x-axis|y-axis)/);
-		if (match) {
-			const [, baseId, newId, axis] = match;
-			objects.push({
-			id: newId,
-			type: 'transform',
-			baseId,
-			transformType: 'reflection',
-			params: { axis },
-			values: {}
-			});
-		}
-		}
-		// --- Rotation ---
-		if (line.startsWith('Rotate')) {
-		const match = line.match(/Rotate\s+(\w+)\s+(\w+)\s+([-]?\d+)(?:\s*\(([-]?\d+),\s*([-]?\d+)\))?/);
-		if (match) {
-			const [, baseId, newId, angle, cx, cy] = match;
-			objects.push({
-			id: newId,
-			type: 'transform',
-			baseId,
-			transformType: 'rotation',
-			params: { angle: parseInt(angle), cx: cx ? parseInt(cx) : 0, cy: cy ? parseInt(cy) : 0 },
-			values: {}
-			});
-		}
-		}
-
-
 		// --- Point ---
 		if (line.startsWith('Point')) {
 			const match = line.match(/Point\s+(\w+)\s*\((\d+),\s*(\d+)\)/);
@@ -306,47 +258,6 @@ private renderCanvas(canvas: HTMLCanvasElement, objects: GeometricObject[]) {
 	const ctx = canvas.getContext('2d');
 	if (!ctx) return;
 	ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-	// Compute transformed points
-		objects.forEach(obj => {
-		if (obj.type === 'transform') {
-			const base = objects.find(o => o.id === obj.baseId && o.type === 'point');
-			if (!base) return;
-
-			let { x, y } = base.values;
-
-			if (obj.transformType === 'translation') {
-			x += obj.params.dx;
-			y += obj.params.dy;
-			}
-
-			if (obj.transformType === 'reflection') {
-			if (obj.params.axis === 'x-axis') {
-				y = 2 * (canvas.height/2) - y; // reflect across horizontal axis
-			} else if (obj.params.axis === 'y-axis') {
-				x = 2 * (canvas.width/2) - x;  // reflect across vertical axis
-			}
-			}
-
-			if (obj.transformType === 'rotation') {
-			const angleRad = obj.params.angle * Math.PI / 180;
-			const cx = obj.params.cx ?? canvas.width/2;
-			const cy = obj.params.cy ?? canvas.height/2;
-
-			const dx = x - cx;
-			const dy = y - cy;
-
-			const newX = cx + dx * Math.cos(angleRad) - dy * Math.sin(angleRad);
-			const newY = cy + dx * Math.sin(angleRad) + dy * Math.cos(angleRad);
-
-			x = newX;
-			y = newY;
-			}
-
-			obj.values.x = x;
-			obj.values.y = y;
-		}
-		});
 
 
 	//Grid + Axis
@@ -609,23 +520,6 @@ private renderCanvas(canvas: HTMLCanvasElement, objects: GeometricObject[]) {
 			ctx.textBaseline = 'middle';
 			ctx.fillText(obj.id, obj.values.x + 8, obj.values.y);
 		}
-
-		//Transformations
-			if (obj.type === 'transform') {
-				ctx.beginPath();
-				ctx.arc(obj.values.x, obj.values.y, 5, 0, Math.PI * 2);
-				ctx.fillStyle = 'cyan';
-				ctx.fill();
-				ctx.strokeStyle = 'black';
-				ctx.lineWidth = 1;
-				ctx.stroke();
-
-				ctx.font = '12px Arial';
-				ctx.fillStyle = 'white';
-				ctx.textAlign = 'left';
-				ctx.textBaseline = 'middle';
-				ctx.fillText(obj.id, obj.values.x + 8, obj.values.y);
-			}
 
 	});
 
