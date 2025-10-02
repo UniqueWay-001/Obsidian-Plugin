@@ -254,29 +254,68 @@ private renderCanvas(canvas: HTMLCanvasElement, objects: GeometricObject[]) {
 	if (!ctx) return;
 	ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-	// Helper: draw arrow
-const drawArrow = (x1: number, y1: number, x2: number, y2: number) => {
-	const dx = x2 - x1;
-	const dy = y2 - y1;
-	const len = Math.hypot(dx, dy);
-	if (len === 0) return;
-	const ux = dx / len, uy = dy / len;
+	//Grid + Axis
+	const step = 50; //grid line spacing (px)
+	const originX = canvas.width/2;
+	const originY = canvas.height/2;
 
-	// shorten by 40px (was 20 before)
-	const tipX = x2 + ux * 10;
-	const tipY = y2 + uy * 10;
+	ctx.save();
+	ctx.strokeStyle = '#333'; // line color
+	ctx.lineWidth = 1;
 
-	// arrowhead size
-	const size = 8;
+	//vertical lines
+	for (let x = originX % step; x <= canvas.width; x += step) {
+		ctx.beginPath();
+		ctx.moveTo(x, 0);
+		ctx.lineTo(x, canvas.height);
+		ctx.stroke();
+	}
+	//horizontal lines
+		for (let y = originX % step; y <= canvas.width; y += step) {
+		ctx.beginPath();
+		ctx.moveTo(0, y);
+		ctx.lineTo(canvas.width, y);
+		ctx.stroke();
+	}
 
+	//Draw Axes
+	ctx.strokeStyle = '#888'; //brighter
+	ctx.lineWidth = 2;
+	//X-Axis
 	ctx.beginPath();
-	ctx.moveTo(tipX, tipY);
-	ctx.lineTo(tipX - uy * size - ux * size, tipY + ux * size - uy * size);
-	ctx.lineTo(tipX + uy * size - ux * size, tipY - ux * size - uy * size);
-	ctx.closePath();
-	ctx.fillStyle = ctx.strokeStyle;
-	ctx.fill();
-};
+	ctx.moveTo(0, originY);
+	ctx.lineTo(canvas.width, originY);
+	ctx.stroke();
+	//Y-Axis
+	ctx.beginPath();
+	ctx.moveTo(originX, 0);
+	ctx.lineTo(originX, canvas.height);
+	ctx.stroke();
+	
+
+	// Helper: draw arrow
+	const drawArrow = (x1: number, y1: number, x2: number, y2: number) => {
+		const dx = x2 - x1;
+		const dy = y2 - y1;
+		const len = Math.hypot(dx, dy);
+		if (len === 0) return;
+		const ux = dx / len, uy = dy / len;
+
+		// shorten by 40px (was 20 before)
+		const tipX = x2 + ux * 10;
+		const tipY = y2 + uy * 10;
+
+		// arrowhead size
+		const size = 8;
+
+		ctx.beginPath();
+		ctx.moveTo(tipX, tipY);
+		ctx.lineTo(tipX - uy * size - ux * size, tipY + ux * size - uy * size);
+		ctx.lineTo(tipX + uy * size - ux * size, tipY - ux * size - uy * size);
+		ctx.closePath();
+		ctx.fillStyle = ctx.strokeStyle;
+		ctx.fill();
+	};
 
 
 	objects.forEach(obj => {
