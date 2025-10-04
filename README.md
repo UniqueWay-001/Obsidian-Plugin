@@ -53,7 +53,7 @@ showLabels	Toggle labels for points and objects	true
 snapToGrid	Snap points to a grid for precision	false
 Development
 # Clone the repo
-git clone https://github.com/your-username/obsidian-geometry-plugin.git
+git clone https://github.com/UniqueWay-001/obsidian-geometry-plugin.git
 
 # Install dependencies
 npm install
