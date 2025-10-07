@@ -1,7 +1,7 @@
 {
   "id": "obsidian-geometry-plugin",
   "name": "Obsidian Geometry Plugin",
-  "version": "0.7.2",
+  "version": "0.8.2",
   "minAppVersion": "1.4.0",
   "description": "Create interactive geometry graphs in Obsidian: points, lines, segments, rays, angles, circles, and more.",
   "author": "UniqueWay",

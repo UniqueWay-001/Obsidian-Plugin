@@ -114,6 +114,20 @@ private parseGeometryCode(code: string): GeometricObject[] {
 		line = line.trim();
 		if (!line) return;
 
+		// --- Transform Point ---
+		if (line.startsWith('TransformPoint')) {
+		const match = line.match(/TransformPoint\s+(\w+)\s*\((\d+),\s*(\d+)\)/);
+		if (match) {
+			const [, id, x, y] = match;
+			objects.push({
+			id,
+			type: 'transform',
+			values: { x: parseInt(x), y: parseInt(y) }
+			});
+		}
+		}
+
+
 		// --- Point ---
 		if (line.startsWith('Point')) {
 			const match = line.match(/Point\s+(\w+)\s*\((\d+),\s*(\d+)\)/);
@@ -484,43 +498,31 @@ private renderCanvas(canvas: HTMLCanvasElement, objects: GeometricObject[]) {
 		}
 	});
 
-	
+
 	// --- Points ---
 	objects.forEach(obj => {
-		if (obj.type === 'point') {
-			// Draw the point
-			ctx.beginPath();
-			ctx.arc(obj.values.x, obj.values.y, 5, 0, Math.PI * 2);
-			ctx.fillStyle = 'yellow';
-			ctx.fill();
-			ctx.strokeStyle = 'black';
-			ctx.lineWidth = 1;
-			ctx.stroke();
+	if (obj.type === 'point' || obj.type === 'transform' || obj.type === 'midpoint') {
+		ctx.beginPath();
+		ctx.arc(obj.values.x, obj.values.y, 5, 0, Math.PI * 2);
 
-			// Draw the label
-			ctx.font = '12px Arial';
-			ctx.fillStyle = 'white'; // label color
-			ctx.textAlign = 'left';
-			ctx.textBaseline = 'middle';
-			ctx.fillText(obj.id, obj.values.x + 8, obj.values.y);
-		}
+		// Color logic
+		if (obj.type === 'transform') ctx.fillStyle = 'blue';
+		else if (obj.type === 'midpoint') ctx.fillStyle = 'orange';
+		else ctx.fillStyle = 'yellow';
 
-		if (obj.type === 'midpoint') {
-			ctx.beginPath();
-			ctx.arc(obj.values.x, obj.values.y, 5, 0, Math.PI * 2);
-			ctx.fillStyle = 'orange'; // differentiate midpoints
-			ctx.fill();
-			ctx.strokeStyle = 'black';
-			ctx.lineWidth = 1;
-			ctx.stroke();
+		ctx.fill();
+		ctx.strokeStyle = 'black';
+		ctx.lineWidth = 1;
+		ctx.stroke();
 
-			ctx.font = '12px Arial';
-			ctx.fillStyle = 'white';
-			ctx.textAlign = 'left';
-			ctx.textBaseline = 'middle';
-			ctx.fillText(obj.id, obj.values.x + 8, obj.values.y);
-		}
-
+		// Label
+		ctx.font = '12px Arial';
+		ctx.fillStyle = 'white';
+		ctx.textAlign = 'left';
+		ctx.textBaseline = 'middle';
+		const label = obj.type === 'transform' ? obj.id + "'" : obj.id;
+		ctx.fillText(label, obj.values.x + 8, obj.values.y);
+	}
 	});
 
 }
