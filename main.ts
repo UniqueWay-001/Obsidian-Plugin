@@ -1,20 +1,19 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
-
+import { Plugin, Notice } from 'obsidian';
 
 interface GeometricObject {
   id: string;
   type:
-    | 'point'
-    | 'line'
-    | 'segment'
-    | 'ray'
-    | 'midpoint'
-    | 'bisector'
-    | 'angle'
-    | 'plane'
-    | 'circle'
-    | 'angleBisector'
-    | 'transform';   
+  | 'point'
+  | 'line'
+  | 'segment'
+  | 'ray'
+  | 'midpoint'
+  | 'bisector'
+  | 'angle'
+  | 'plane'
+  | 'circle'
+  | 'angleBisector'
+  ;
   values: Record<string, number>;
   startId?: string;
   endId?: string;
@@ -24,540 +23,584 @@ interface GeometricObject {
   p1Id?: string;
   p2Id?: string;
   otherIds?: string[];
-  baseId?: string;        
-  transformType?: string; 
-  params?: any;           
+  baseId?: string;
+  meta?: Record<string, any>;
 }
 
 
+
+// used to keep track of handlers so we can clean them up on unload
+type CanvasEntry = {
+  objects: GeometricObject[];
+  handlers: {
+    mousedown: (e: MouseEvent) => void;
+    mousemove: (e: MouseEvent) => void;
+    mouseup: (e: MouseEvent) => void;
+    mouseleave: (e: MouseEvent) => void;
+  };
+};
 
 export default class GeometryPlugin extends Plugin {
-	private objectsMap: Map<HTMLCanvasElement, GeometricObject[]> = new Map();
-	private locked = false; //LOCK
+  private canvasMap: Map<HTMLCanvasElement, CanvasEntry> = new Map();
+  private locked = false;
+  private cssLink?: HTMLLinkElement;
 
-	async onload() {
-		console.log('🎉 Geometry Plugin Loaded!');
+ private parseGeometryCode(code: string): GeometricObject[] {
+  const objects: GeometricObject[] = [];
+  const lines = code.split(/\r?\n/);
 
-    // Load CSS from plugin folder
-		const cssLink = document.createElement('link');
-		cssLink.rel = 'stylesheet';
-		cssLink.type = 'text/css';
-		cssLink.href = this.manifest.dir + '/styles.css';
-		document.head.appendChild(cssLink);
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#') || line.startsWith('//')) continue;
 
-		console.log('🎨 Geometry Plugin CSS loaded!');
+    // --- Point ---
+    // Example: "A: point 100 200"
+    let match = line.match(/^(\w+):\s*point\s+([\d.-]+)\s+([\d.-]+)/);
+    if (match) {
+      const [, id, x, y] = match;
+      objects.push({
+        id,
+        type: 'point',
+        values: { x: Number(x), y: Number(y) }
+      });
+      continue;
+    }
 
+    // --- Line, Segment, Ray ---
+    // Example: "L1: line A B"
+    match = line.match(/^(\w+):\s*(line|segment|ray)\s+(\w+)\s+(\w+)/);
+    if (match) {
+      const [, id, type, startId, endId] = match;
+      objects.push({ id, type: type as any, startId, endId, values: {} });
+      continue;
+    }
 
+    
 
-		this.addRibbonIcon('lock', 'Toggle Canvas Drag', () => {
-			this.locked = !this.locked;
-			new Notice(`Canvas drag is now ${this.locked ? 'locked' : 'unlocked'}`);
-		});
+    // --- Midpoint ---
+    // Example: "M1: midpoint A B"
+    match = line.match(/^(\w+):\s*midpoint\s+(\w+)\s+(\w+)/);
+    if (match) {
+      const [, id, startId, endId] = match;
+      objects.push({ id, type: 'midpoint', startId, endId, values: {} });
+      continue;
+    }
 
+    // --- Bisector ---
+    // Example: "B1: bisector A B"
+    match = line.match(/^(\w+):\s*bisector\s+(\w+)\s+(\w+)/);
+    if (match) {
+      const [, id, startId, endId] = match;
+      objects.push({ id, type: 'bisector', startId, endId, values: {} });
+      continue;
+    }
 
-		this.addCommand({
-			id: 'open-geometry-panel',
-			name: 'Open Geometry Panel',
-			callback: () => console.log('Command triggered: Open Geometry Panel'),
-		});
+    // --- Angle ---
+    // Example: "Angle1: angle A B C"
+    match = line.match(/^(\w+):\s*angle\s+(\w+)\s+(\w+)\s+(\w+)/);
+    if (match) {
+      const [, id, vertexId, p1Id, p2Id] = match;
+      objects.push({ id, type: 'angle', vertexId, p1Id, p2Id, values: {} });
+      continue;
+    }
 
-		this.registerMarkdownPostProcessor((el, ctx) => {
-		const blocks = el.querySelectorAll('pre > code.language-geometry');
-		blocks.forEach(block => {
-			const pre = block.parentElement;
-			if (!pre) return;
+    // --- Angle Bisector ---
+    // Example: "AB1: angleBisector Angle1"
+    match = line.match(/^(\w+):\s*angleBisector\s+(\w+)/);
+    if (match) {
+      const [, id, otherId] = match;
+      objects.push({ id, type: 'angleBisector', otherIds: [otherId], values: {} });
+      continue;
+    }
 
-			const wrapper = document.createElement('div');
-			wrapper.classList.add('geometry-wrapper');
+    // --- Circle ---
+    // Example: "Circle1: circle A B"
+    match = line.match(/^(\w+):\s*circle\s+(\w+)\s+(\w+)/);
+    if (match) {
+      const [, id, centerId, pointId] = match;
+      objects.push({ id, type: 'circle', centerId, pointId, values: {} });
+      continue;
+    }
 
-			const canvas = document.createElement('canvas');
+    
+  }
 
-			// default size
-			let width = 500;
-			let height = 500;
-
-			// check for canvas size in code block (first line like: #canvas 800 600)
-			const firstLine = (block.textContent || '').split('\n')[0].trim();
-			const sizeMatch = firstLine.match(/^#canvas\s+(\d+)\s+(\d+)/);
-			if (sizeMatch) {
-				width = parseInt(sizeMatch[1]);
-				height = parseInt(sizeMatch[2]);
-			}
-
-			canvas.width = width;
-			canvas.height = height;
-			canvas.classList.add('geometry-canvas');
-			wrapper.appendChild(canvas);
-
-			pre.parentElement?.insertBefore(wrapper, pre.nextSibling);
-			pre.style.display = 'none';
-
-			const objects = this.parseGeometryCode(block.textContent || '');
-			this.objectsMap.set(canvas, objects);
-
-			this.renderCanvas(canvas, objects);
-			this.enableDrag(canvas, objects);
-		});
-	});
+  return objects;
 }
 
 
-	onunload() {
-		console.log('Geometry Plugin Unloaded');
-	}
+  async onload() {
+    console.log('🎉 Geometry Plugin Loaded!');
 
-private parseGeometryCode(code: string): GeometricObject[] {
-	const objects: GeometricObject[] = [];
-	const lines = code.split('\n');
+    // Load CSS if exists
+    try {
+      this.cssLink = document.createElement('link');
+      this.cssLink.rel = 'stylesheet';
+      this.cssLink.type = 'text/css';
+      this.cssLink.href = this.manifest.dir + '/styles.css';
+      document.head.appendChild(this.cssLink);
+      console.log('🎨 Geometry Plugin CSS loaded!');
+    } catch (e) {
+      console.warn('Could not load plugin CSS:', e);
+    }
 
-	lines.forEach(line => {
-		line = line.trim();
-		if (!line) return;
+    // Toggle lock
+    this.addRibbonIcon('lock', 'Toggle Canvas Drag', () => {
+      this.locked = !this.locked;
+      new Notice(`Canvas drag is now ${this.locked ? 'locked' : 'unlocked'}`);
+    });
 
-		// --- Transform Point ---
-		if (line.startsWith('TransformPoint')) {
-		const match = line.match(/TransformPoint\s+(\w+)\s*\((\d+),\s*(\d+)\)/);
-		if (match) {
-			const [, id, x, y] = match;
-			objects.push({
-			id,
-			type: 'transform',
-			values: { x: parseInt(x), y: parseInt(y) }
-			});
-		}
-		}
+    // ---------------- GEOMETRY CODE BLOCK ----------------
+    this.registerMarkdownPostProcessor((el) => {
+      const blocks = el.querySelectorAll('pre > code.language-geometry');
+      blocks.forEach(block => {
+        const pre = block.parentElement;
+        if (!pre) return;
 
+        const wrapper = document.createElement('div');
+        wrapper.classList.add('geometry-wrapper');
 
-		// --- Point ---
-		if (line.startsWith('Point')) {
-			const match = line.match(/Point\s+(\w+)\s*\((\d+),\s*(\d+)\)/);
-			if (match) {
-				const [, id, x, y] = match;
-				objects.push({
-					id,
-					type: 'point',
-					values: { x: parseInt(x), y: parseInt(y) }
-				});
-			}
-		}
+        const canvas = document.createElement('canvas');
 
-		// --- Line / Segment / Ray ---
-		if (line.startsWith('Line') || line.startsWith('Segment') || line.startsWith('Ray')) {
-			const match = line.match(/(Line|Segment|Ray)\s+(\w+)\s+(\w+)\s+(\w+)/);
-			if (match) {
-				const [, type, id, start, end] = match;
-				const startObj = objects.find(o => o.id === start);
-				const endObj = objects.find(o => o.id === end);
-				if (startObj && endObj) {
-					objects.push({
-						id,
-						type: type.toLowerCase() as 'line' | 'segment' | 'ray',
-						startId: start,
-						endId: end,
-						values: {
-							x1: startObj.values.x,
-							y1: startObj.values.y,
-							x2: endObj.values.x,
-							y2: endObj.values.y
-						}
-					});
-				}
-			}
-		}
+        // default size
+        let width = 500;
+        let height = 500;
 
-		// --- Midpoint ---
-		if (line.startsWith('Midpoint')) {
-			const match = line.match(/Midpoint\s+(\w+)\s+(\w+)\s+(\w+)/);
-			if (match) {
-				const [, id, p1Id, p2Id] = match;
-				const p1 = objects.find(o => o.id === p1Id);
-				const p2 = objects.find(o => o.id === p2Id);
-				if (p1 && p2) {
-					objects.push({
-						id,
-						type: 'midpoint',
-						values: {}, // computed dynamically in renderCanvas
-						startId: p1Id,
-						endId: p2Id
-					});
-				}
-			}
-		}
+        const firstLine = (block.textContent || '').split('\n')[0].trim();
+        const sizeMatch = firstLine.match(/^#canvas\s+(\d+)\s+(\d+)/);
+        if (sizeMatch) {
+          width = parseInt(sizeMatch[1]);
+          height = parseInt(sizeMatch[2]);
+        }
 
-		// --- Bisector ---
-		if (line.startsWith('Bisector')) {
-			const match = line.match(/Bisector\s+(\w+)\s+(\w+)\s+(\w+)/);
-			if (match) {
-				const [, id, p1Id, p2Id] = match;
-				const p1 = objects.find(o => o.id === p1Id);
-				const p2 = objects.find(o => o.id === p2Id);
-				if (p1 && p2) {
-					objects.push({
-						id,
-						type: 'bisector',
-						values: {},
-						startId: p1Id,
-						endId: p2Id
-					});
-				}
-			}
-		}
+        canvas.width = width;
+        canvas.height = height;
+        canvas.classList.add('geometry-canvas');
+        wrapper.appendChild(canvas);
 
-		// --- Circle ---
-		if (line.startsWith('Circle')) {
-			const match = line.match(/Circle\s+(\w+)\s+(\w+)\s+(\w+)/);
-			if (match) {
-				const [, id, centerId, pointId] = match;
-				const center = objects.find(o => o.id === centerId);
-				const pt = objects.find(o => o.id === pointId);
-				if (center && pt) {
-					objects.push({
-						id,
-						type: 'circle',
-						values: {}, // radius computed in renderCanvas
-						centerId,
-						pointId
-					});
-				}
-			}
-		}
+        pre.parentElement?.insertBefore(wrapper, pre.nextSibling);
+        pre.style.display = 'none';
 
-		// --- Angle ---
-		if (line.startsWith('Angle')) {
-			const match = line.match(/Angle\s+(\w+)\s+(\w+)\s+(\w+)\s+(\w+)/);
-			if (match) {
-				const [, id, vertexId, p1Id, p2Id] = match;
-				const vertex = objects.find(o => o.id === vertexId);
-				const p1 = objects.find(o => o.id === p1Id);
-				const p2 = objects.find(o => o.id === p2Id);
-				if (vertex && p1 && p2) {
-					objects.push({
-						id,
-						type: 'angle',
-						values: {},
-						vertexId,
-						p1Id,
-						p2Id
-					});
-				}
-			}
-		}
+        const objects = this.parseGeometryCode(block.textContent || '');
+        // if no points, add a dummy point for testing
+        if (objects.length === 0) {
+          objects.push({ id: 'A', type: 'point', values: { x: 100, y: 100 } });
+        }
 
-		// --- AngleBisector ---
-		if (line.startsWith('AngleBisector')) {
-			const match = line.match(/AngleBisector\s+(\w+)\s+(\w+)/);
-			if (match) {
-				const [, id, angleId] = match;
-				const angleObj = objects.find(o => o.id === angleId);
-				if (angleObj && angleObj.type === 'angle') {
-					objects.push({
-						id,
-						type: 'angleBisector',
-						values: {}, 
-						otherIds: [angleId] // store reference to angle
-					});
-				}
-			}
-		}
+        this.setupCanvas(canvas, objects);
+        this.renderCanvas(canvas, objects);
+      });
+    });
 
-	});
+    // ---------------- 2-COLUMN PROOF ----------------
+    this.registerMarkdownPostProcessor((el) => {
+      const blocks = el.querySelectorAll(
+        'pre > code.language-proof2, pre > code.lang-proof2'
+      );
 
-	return objects;
-}
+      blocks.forEach(block => {
+        const pre = block.parentElement;
+        if (!pre) return;
 
+        const wrapper = document.createElement('div');
+        wrapper.className = 'proof-2col';
 
+        const table = document.createElement('table');
 
-	// ---------------------- RENDER ----------------------
-private renderCanvas(canvas: HTMLCanvasElement, objects: GeometricObject[]) {
-	const ctx = canvas.getContext('2d');
-	if (!ctx) return;
-	ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const thead = document.createElement('thead');
+        const headerRow = document.createElement('tr');
 
+        ['Step', 'Statement', 'Reason'].forEach(text => {
+          const th = document.createElement('th');
+          th.textContent = text;
+          headerRow.appendChild(th);
+        });
 
-	//Grid + Axis
-	const step = 50; //grid line spacing (px)
-	const originX = canvas.width/2;
-	const originY = canvas.height/2;
+        thead.appendChild(headerRow);
+        table.appendChild(thead);
 
-	ctx.save();
-	ctx.strokeStyle = '#333'; // line color
-	ctx.lineWidth = 1;
+        const tbody = document.createElement('tbody');
+        table.appendChild(tbody);
 
-	//vertical lines
-	for (let x = originX % step; x <= canvas.width; x += step) {
-		ctx.beginPath();
-		ctx.moveTo(x, 0);
-		ctx.lineTo(x, canvas.height);
-		ctx.stroke();
-	}
-	//horizontal lines
-		for (let y = originX % step; y <= canvas.width; y += step) {
-		ctx.beginPath();
-		ctx.moveTo(0, y);
-		ctx.lineTo(canvas.width, y);
-		ctx.stroke();
-	}
+        const raw = block.textContent || '';
+        const lines = raw.split(/\r?\n/);
 
-	//Draw Axes
-	ctx.strokeStyle = '#888'; //brighter
-	ctx.lineWidth = 2;
-	//X-Axis
-	ctx.beginPath();
-	ctx.moveTo(0, originY);
-	ctx.lineTo(canvas.width, originY);
-	ctx.stroke();
-	//Y-Axis
-	ctx.beginPath();
-	ctx.moveTo(originX, 0);
-	ctx.lineTo(originX, canvas.height);
-	ctx.stroke();
+        let hasSteps = false;
 
+        lines.forEach(rawLine => {
+          const line = rawLine.trim();
+          if (!line) return;
+          if (line.startsWith('//')) return;
 
-	// Helper: draw arrow
-	const drawArrow = (x1: number, y1: number, x2: number, y2: number) => {
-		const dx = x2 - x1;
-		const dy = y2 - y1;
-		const len = Math.hypot(dx, dy);
-		if (len === 0) return;
-		const ux = dx / len, uy = dy / len;
+          const firstPipe = line.indexOf('|');
+          if (firstPipe === -1) return;
 
-		// shorten by 40px (was 20 before)
-		const tipX = x2 + ux * 10;
-		const tipY = y2 + uy * 10;
+          const secondPipe = line.indexOf('|', firstPipe + 1);
+          if (secondPipe === -1) return;
 
-		// arrowhead size
-		const size = 8;
+          const rawStep = line.slice(0, firstPipe).trim();
+          const statement = line.slice(firstPipe + 1, secondPipe).trim();
+          const reason = line.slice(secondPipe + 1).trim();
 
-		ctx.beginPath();
-		ctx.moveTo(tipX, tipY);
-		ctx.lineTo(tipX - uy * size - ux * size, tipY + ux * size - uy * size);
-		ctx.lineTo(tipX + uy * size - ux * size, tipY - ux * size - uy * size);
-		ctx.closePath();
-		ctx.fillStyle = ctx.strokeStyle;
-		ctx.fill();
-	};
+          const tr = document.createElement('tr');
 
+          const tdStep = document.createElement('td');
+          if (rawStep.match(/^\d+\.?$/)) {
+            tdStep.textContent = rawStep.replace('.', '');
+            hasSteps = true;
+          } else {
+            tdStep.textContent = '';
+          }
 
-	objects.forEach(obj => {
-		// --- Lines, Segments, Rays, Bisectors ---
-		if (['line', 'segment', 'ray', 'bisector'].includes(obj.type)) {
-			const p1 = objects.find(o => o.id === obj.startId);
-			const p2 = objects.find(o => o.id === obj.endId);
-			if (!p1 || !p2) return;
+          const tdStatement = document.createElement('td');
+          tdStatement.textContent = statement;
 
-			let x1 = p1.values.x;
-			let y1 = p1.values.y;
-			let x2 = p2.values.x;
-			let y2 = p2.values.y;
+          const tdReason = document.createElement('td');
+          tdReason.textContent = reason;
 
-			if (obj.type === 'ray') {
-				const dx = x2 - x1;
-				const dy = y2 - y1;
-				const len = Math.hypot(dx, dy);
-				if (len === 0) return;
-				const ux = dx / len, uy = dy / len;
-				x2 = x1 + ux * 300;
-				y2 = y1 + uy * 300;
-			}
+          tr.appendChild(tdStep);
+          tr.appendChild(tdStatement);
+          tr.appendChild(tdReason);
 
-			if (obj.type === 'bisector') {
-				const mx = (x1 + x2) / 2;
-				const my = (y1 + y2) / 2;
-				const dx = x2 - x1;
-				const dy = y2 - y1;
-				const len = Math.hypot(dx, dy);
-				if (len === 0) return;
-				const ux = -dy / len, uy = dx / len;
-				const halfLen = 100;
-				x1 = mx - ux * halfLen; 
-				y1 = my - uy * halfLen;
-				x2 = mx + ux * halfLen; 
-				y2 = my + uy * halfLen;
-			}
+          tbody.appendChild(tr);
+        });
 
-			ctx.beginPath();
-			ctx.moveTo(x1, y1);
-			ctx.lineTo(x2, y2);
-			ctx.strokeStyle = obj.type === 'bisector' ? 'cyan' : 'white';
-			ctx.lineWidth = 2;
-			ctx.stroke();
+        if (!hasSteps) {
+          headerRow.removeChild(headerRow.children[0]);
+          tbody.querySelectorAll('tr').forEach(row => {
+            row.removeChild(row.children[0]);
+          });
+        }
 
-			// arrows
-			if (obj.type === 'line') {
-				drawArrow(x2, y2, x1, y1); // both ends
-				drawArrow(x1, y1, x2, y2);
-			}
-			if (obj.type === 'ray') {
-				drawArrow(x1, y1, x2, y2);
-			}
-		}
-		
-		// --- Angles ---
-		if (obj.type === 'angle') {
-			const vertex = objects.find(o => o.id === obj.vertexId);
-			const p1 = objects.find(o => o.id === obj.p1Id);
-			const p2 = objects.find(o => o.id === obj.p2Id);
-			if (!vertex || !p1 || !p2) return;
+        wrapper.appendChild(table);
+        pre.parentElement?.insertBefore(wrapper, pre.nextSibling);
+        pre.style.display = 'none';
+      });
+    });
+  }
 
-			// Compute start/end angles
-			let startAngle = Math.atan2(p1.values.y - vertex.values.y, p1.values.x - vertex.values.x);
-			let endAngle = Math.atan2(p2.values.y - vertex.values.y, p2.values.x - vertex.values.x);
+  onunload() {
+    console.log('Geometry Plugin Unloaded');
 
-			// Ensure smaller arc
-			let diff = endAngle - startAngle;
-			if (diff < 0) diff += 2 * Math.PI;
-			if (diff > Math.PI) [startAngle, endAngle] = [endAngle, startAngle + 2 * Math.PI];
+    if (this.cssLink && this.cssLink.parentElement) {
+      this.cssLink.parentElement.removeChild(this.cssLink);
+    }
 
-			// Draw the arc
-			const radius = 40;
-			ctx.beginPath();
-			ctx.arc(vertex.values.x, vertex.values.y, radius, startAngle, endAngle, false);
-			ctx.strokeStyle = 'purple';
-			ctx.lineWidth = 2;
-			ctx.stroke();
+    this.canvasMap.forEach((entry, canvas) => {
+      const { mousedown, mousemove, mouseup, mouseleave } = entry.handlers;
+      canvas.removeEventListener('mousedown', mousedown);
+      canvas.removeEventListener('mousemove', mousemove);
+      canvas.removeEventListener('mouseup', mouseup);
+      canvas.removeEventListener('mouseleave', mouseleave);
+    });
 
-			// Draw the measurement (in degrees)
-			const angleDeg = Math.round((endAngle - startAngle) * 180 / Math.PI);
-			const midAngle = (startAngle + endAngle) / 2;
-			const labelX = vertex.values.x + Math.cos(midAngle) * (radius + 15);
-			const labelY = vertex.values.y + Math.sin(midAngle) * (radius + 15);
+    this.canvasMap.clear();
+  }
 
-			ctx.font = '12px Arial';
-			ctx.fillStyle = 'white';
-			ctx.textAlign = 'center';
-			ctx.textBaseline = 'middle';
-			ctx.fillText(`${angleDeg}°`, labelX, labelY);
-		}
+  // -------------------- CANVAS SETUP --------------------
+  private setupCanvas(canvas: HTMLCanvasElement, objects: GeometricObject[]) {
+    if (this.canvasMap.has(canvas)) {
+      const prev = this.canvasMap.get(canvas)!;
+      canvas.removeEventListener('mousedown', prev.handlers.mousedown);
+      canvas.removeEventListener('mousemove', prev.handlers.mousemove);
+      canvas.removeEventListener('mouseup', prev.handlers.mouseup);
+      canvas.removeEventListener('mouseleave', prev.handlers.mouseleave);
+      this.canvasMap.delete(canvas);
+    }
 
-		// --- Angle Bisector ---
-		if (obj.type === 'angleBisector') {
-			const angleObj = objects.find(o => o.id === obj.otherIds?.[0]);
-			if (!angleObj) return;
-
-			const vertex = objects.find(o => o.id === angleObj.vertexId);
-			const p1 = objects.find(o => o.id === angleObj.p1Id);
-			const p2 = objects.find(o => o.id === angleObj.p2Id);
-			if (!vertex || !p1 || !p2) return;
-
-			const dx1 = p1.values.x - vertex.values.x;
-			const dy1 = p1.values.y - vertex.values.y;
-			const dx2 = p2.values.x - vertex.values.x;
-			const dy2 = p2.values.y - vertex.values.y;
-
-			// Normalize vectors
-			const len1 = Math.hypot(dx1, dy1);
-			const len2 = Math.hypot(dx2, dy2);
-			const ux1 = dx1 / len1;
-			const uy1 = dy1 / len1;
-			const ux2 = dx2 / len2;
-			const uy2 = dy2 / len2;
-
-			// Angle bisector vector (unit)
-			const bisX = ux1 + ux2;
-			const bisY = uy1 + uy2;
-			const bisLen = Math.hypot(bisX, bisY);
-			if (bisLen === 0) return;
-			const bx = bisX / bisLen;
-			const by = bisY / bisLen;
-
-			const length = 100; // arbitrary line length
-			ctx.beginPath();
-			ctx.moveTo(vertex.values.x, vertex.values.y);
-			ctx.lineTo(vertex.values.x + bx * length, vertex.values.y + by * length);
-			ctx.strokeStyle = 'orange';
-			ctx.lineWidth = 2;
-			ctx.stroke();
-		}
-
-
-		// --- Circle ---
-		if (obj.type === 'circle') {
-			const center = objects.find(o => o.id === obj.centerId);
-			const point = objects.find(o => o.id === obj.pointId);
-			if (!center || !point) return;
-			const dx = point.values.x - center.values.x;
-			const dy = point.values.y - center.values.y;
-			const r = Math.hypot(dx, dy);
-			ctx.beginPath();
-			ctx.arc(center.values.x, center.values.y, r, 0, Math.PI * 2);
-			ctx.strokeStyle = 'lime';
-			ctx.lineWidth = 2;
-			ctx.stroke();
-		}
-	});
-	 
-
-	// Compute dynamic values first
-	objects.forEach(obj => {
-		if (obj.type === 'midpoint') {
-			const p1 = objects.find(o => o.id === obj.startId);
-			const p2 = objects.find(o => o.id === obj.endId);
-			if (!p1 || !p2) return;
-			obj.values.x = (p1.values.x + p2.values.x) / 2;
-			obj.values.y = (p1.values.y + p2.values.y) / 2;
-		}
-	});
-
-
-	// --- Points ---
-	objects.forEach(obj => {
-	if (obj.type === 'point' || obj.type === 'transform' || obj.type === 'midpoint') {
-		ctx.beginPath();
-		ctx.arc(obj.values.x, obj.values.y, 5, 0, Math.PI * 2);
-
-		// Color logic
-		if (obj.type === 'transform') ctx.fillStyle = 'blue';
-		else if (obj.type === 'midpoint') ctx.fillStyle = 'orange';
-		else ctx.fillStyle = 'yellow';
-
-		ctx.fill();
-		ctx.strokeStyle = 'black';
-		ctx.lineWidth = 1;
-		ctx.stroke();
-
-		// Label
-		ctx.font = '12px Arial';
-		ctx.fillStyle = 'white';
-		ctx.textAlign = 'left';
-		ctx.textBaseline = 'middle';
-		const label = obj.type === 'transform' ? obj.id + "'" : obj.id;
-		ctx.fillText(label, obj.values.x + 8, obj.values.y);
-	}
-	});
-
-}
-
-
-
-	// ---------------------- ENABLE DRAG ----------------------
-	private enableDrag(canvas: HTMLCanvasElement, objects: GeometricObject[]) {
     let draggingPoint: GeometricObject | null = null;
 
-    canvas.addEventListener('mousedown', (e) => {
-        if (this.locked) return; // ❌ skip drag if locked
+    const mousedown = (e: MouseEvent) => {
+      if (this.locked) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
 
-        const rect = canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
+      draggingPoint = objects.find(obj =>
+        obj.type === 'point' &&
+        Math.hypot((obj.values.x ?? Infinity) - x, (obj.values.y ?? Infinity) - y) < 12
+      ) || null;
+    };
 
-        draggingPoint = objects.find(obj =>
-            obj.type === 'point' &&
-            Math.hypot(obj.values.x - x, obj.values.y - y) < 12
-        ) || null;
+    const mousemove = (e: MouseEvent) => {
+      if (!draggingPoint || this.locked) return;
+      const rect = canvas.getBoundingClientRect();
+      draggingPoint.values.x = e.clientX - rect.left;
+      draggingPoint.values.y = e.clientY - rect.top;
+
+      this.renderCanvas(canvas, objects);
+    };
+
+    const mouseup = () => { draggingPoint = null; };
+    const mouseleave = () => { draggingPoint = null; };
+
+    canvas.addEventListener('mousedown', mousedown);
+    canvas.addEventListener('mousemove', mousemove);
+    canvas.addEventListener('mouseup', mouseup);
+    canvas.addEventListener('mouseleave', mouseleave);
+
+    this.canvasMap.set(canvas, {
+      objects,
+      handlers: { mousedown, mousemove, mouseup, mouseleave }
+    });
+  }
+
+  // -------------------- RENDER --------------------
+  private renderCanvas(canvas: HTMLCanvasElement, objects: GeometricObject[]) {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Grid
+    const step = 50;
+    const originX = canvas.width / 2;
+    const originY = canvas.height / 2;
+
+    ctx.save();
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+
+    for (let x = originX % step; x <= canvas.width; x += step) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, canvas.height);
+      ctx.stroke();
+    }
+
+    for (let y = originY % step; y <= canvas.height; y += step) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(canvas.width, y);
+      ctx.stroke();
+    }
+
+    // Axes
+    ctx.strokeStyle = '#888';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, originY);
+    ctx.lineTo(canvas.width, originY);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(originX, 0);
+    ctx.lineTo(originX, canvas.height);
+    ctx.stroke();
+
+    // Map objects by id
+    const idMap = new Map<string, GeometricObject>();
+    objects.forEach(o => idMap.set(o.id, o));
+
+    // Compute midpoints
+    objects.forEach(obj => {
+      if (obj.type === 'midpoint') {
+        const p1 = idMap.get(obj.startId ?? '');
+        const p2 = idMap.get(obj.endId ?? '');
+        if (p1 && p2) {
+          obj.values.x = (p1.values.x + p2.values.x) / 2;
+          obj.values.y = (p1.values.y + p2.values.y) / 2;
+        }
+      }
     });
 
-    canvas.addEventListener('mousemove', (e) => {
-        if (!draggingPoint || this.locked) return;
+    // Helper: draw arrow
+    const drawArrow = (x1: number, y1: number, x2: number, y2: number) => {
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+      const len = Math.hypot(dx, dy);
+      if (len === 0) return;
+      const ux = dx / len, uy = dy / len;
+      const tipX = x2 + ux * 10;
+      const tipY = y2 + uy * 10;
+      const size = 8;
+      ctx.beginPath();
+      ctx.moveTo(tipX, tipY);
+      ctx.lineTo(tipX - uy * size - ux * size, tipY + ux * size - uy * size);
+      ctx.lineTo(tipX + uy * size - ux * size, tipY - ux * size - uy * size);
+      ctx.closePath();
+      ctx.fill();
+    };
 
-        const rect = canvas.getBoundingClientRect();
-        draggingPoint.values.x = e.clientX - rect.left;
-        draggingPoint.values.y = e.clientY - rect.top;
+    // Draw lines, segments, rays, bisectors
+    objects.forEach(obj => {
+      if (['line', 'segment', 'ray', 'bisector'].includes(obj.type)) {
+        const p1 = idMap.get(obj.startId ?? '');
+        const p2 = idMap.get(obj.endId ?? '');
+        if (!p1 || !p2) return;
+        if (p1.values?.x == null || p2.values?.x == null) return;
 
-        this.renderCanvas(canvas, objects);
+        let x1 = p1.values.x;
+        let y1 = p1.values.y;
+        let x2 = p2.values.x;
+        let y2 = p2.values.y;
+
+        // ---------- BISECTORS ----------
+        if (obj.type === 'bisector') {
+          const mx = (x1 + x2) / 2;
+          const my = (y1 + y2) / 2;
+          const dx = x2 - x1;
+          const dy = y2 - y1;
+          const len = Math.hypot(dx, dy);
+          if (len !== 0) {
+            const ux = -dy / len;
+            const uy = dx / len;
+            const halfLen = Math.max(canvas.width, canvas.height) / 3;
+            x1 = mx - ux * halfLen;
+            y1 = my - uy * halfLen;
+            x2 = mx + ux * halfLen;
+            y2 = my + uy * halfLen;
+          }
+        }
+
+        // ---------- RAYS ----------
+        if (obj.type === 'ray') {
+          const dx = x2 - x1;
+          const dy = y2 - y1;
+          const len = Math.hypot(dx, dy);
+          if (len !== 0) {
+            const ux = dx / len;
+            const uy = dy / len;
+            const extent = Math.max(canvas.width, canvas.height) * 1.2;
+            x1 = x1 - ux * extent; // extend backward
+            y1 = y1 - uy * extent;
+            x2 = x2 + ux * extent; // extend forward
+            y2 = y2 + uy * extent;
+          }
+        }
+
+        // ---------- DRAW LINE ----------
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.strokeStyle = obj.type === 'bisector' ? 'cyan' : 'white';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // ---------- DRAW ARROWS ----------
+        ctx.fillStyle = ctx.strokeStyle as string;
+        const drawArrow = (x1: number, y1: number, x2: number, y2: number) => {
+          const dx = x2 - x1;
+          const dy = y2 - y1;
+          const len = Math.hypot(dx, dy);
+          if (len === 0) return;
+          const ux = dx / len, uy = dy / len;
+          const tipX = x2 + ux * 10;
+          const tipY = y2 + uy * 10;
+          const size = 8;
+          ctx.beginPath();
+          ctx.moveTo(tipX, tipY);
+          ctx.lineTo(tipX - uy * size - ux * size, tipY + ux * size - uy * size);
+          ctx.lineTo(tipX + uy * size - ux * size, tipY - ux * size - uy * size);
+          ctx.closePath();
+          ctx.fill();
+        };
+
+        if (obj.type === 'line') {
+          drawArrow(x2, y2, x1, y1); // both ends
+          drawArrow(x1, y1, x2, y2);
+        }
+        if (obj.type === 'ray') {
+          drawArrow(x1, y1, x2, y2);
+        }
+      }
     });
 
-    canvas.addEventListener('mouseup', () => draggingPoint = null);
-    canvas.addEventListener('mouseleave', () => draggingPoint = null);
-}
+
+
+    // Draw angles / angle bisectors
+    objects.forEach(obj => {
+      if (obj.type === 'angle') {
+        const vertex = idMap.get(obj.vertexId ?? '');
+        const p1 = idMap.get(obj.p1Id ?? '');
+        const p2 = idMap.get(obj.p2Id ?? '');
+        if (!vertex || !p1 || !p2) return;
+
+        const startAngleOrig = Math.atan2(p1.values.y - vertex.values.y, p1.values.x - vertex.values.x);
+        const endAngleOrig = Math.atan2(p2.values.y - vertex.values.y, p2.values.x - vertex.values.x);
+        let diff = endAngleOrig - startAngleOrig;
+        let startAngle = startAngleOrig;
+        if (diff < 0) diff += Math.PI * 2;
+        if (diff > Math.PI) {
+          diff = 2 * Math.PI - diff;
+          startAngle = endAngleOrig;
+        }
+
+        const radius = 40;
+        ctx.beginPath();
+        ctx.arc(vertex.values.x, vertex.values.y, radius, startAngle, startAngle + diff);
+        ctx.strokeStyle = 'purple';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        const midAngle = startAngle + diff / 2;
+        ctx.font = '12px Arial';
+        ctx.fillStyle = 'white';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`${Math.round(diff * 180 / Math.PI)}°`,
+          vertex.values.x + Math.cos(midAngle) * (radius + 15),
+          vertex.values.y + Math.sin(midAngle) * (radius + 15)
+        );
+      }
+
+      if (obj.type === 'angleBisector') {
+        const angleObj = idMap.get(obj.otherIds?.[0] ?? '');
+        if (!angleObj || angleObj.type !== 'angle') return;
+        const vertex = idMap.get(angleObj.vertexId ?? '');
+        const p1 = idMap.get(angleObj.p1Id ?? '');
+        const p2 = idMap.get(angleObj.p2Id ?? '');
+        if (!vertex || !p1 || !p2) return;
+
+        const dx1 = p1.values.x - vertex.values.x, dy1 = p1.values.y - vertex.values.y;
+        const dx2 = p2.values.x - vertex.values.x, dy2 = p2.values.y - vertex.values.y;
+        let bx = dx1 / Math.hypot(dx1, dy1) + dx2 / Math.hypot(dx2, dy2);
+        let by = dy1 / Math.hypot(dx1, dy1) + dy2 / Math.hypot(dx2, dy2);
+        const len = Math.hypot(bx, by);
+        if (len < 1e-6) { bx = -dy1 / Math.hypot(dx1, dy1); by = dx1 / Math.hypot(dx1, dy1); }
+        ctx.beginPath();
+        ctx.moveTo(vertex.values.x, vertex.values.y);
+        ctx.lineTo(vertex.values.x + (bx / len) * 150, vertex.values.y + (by / len) * 150);
+        ctx.strokeStyle = 'orange';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+    });
+
+    // Draw circles
+    objects.forEach(obj => {
+      if (obj.type === 'circle') {
+        const center = idMap.get(obj.centerId ?? '');
+        const point = idMap.get(obj.pointId ?? '');
+        if (!center || !point) return;
+        const r = Math.hypot(point.values.x - center.values.x, point.values.y - center.values.y);
+        ctx.beginPath();
+        ctx.arc(center.values.x, center.values.y, r, 0, Math.PI * 2);
+        ctx.strokeStyle = 'lime';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+    });
+
+    // Draw points
+    objects.forEach(obj => {
+      if (!obj.values?.x || !obj.values?.y) return;
+      ctx.beginPath();
+      ctx.arc(obj.values.x, obj.values.y, 5, 0, Math.PI * 2);
+      ctx.fillStyle = obj.type === 'midpoint' ? 'orange' : 'yellow';
+      ctx.fill();
+      ctx.strokeStyle = 'black';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      ctx.font = '12px Arial';
+      ctx.fillStyle = 'white';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      const label = obj.id;
+      ctx.fillText(label, obj.values.x + 8, obj.values.y);
+    });
+
+    ctx.restore();
+  }
 
 }
