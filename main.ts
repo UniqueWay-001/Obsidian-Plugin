@@ -495,10 +495,12 @@ export default class GeometryPlugin extends Plugin {
           ctx.fill();
         };
 
+        //line arrows
         if (obj.type === 'line') {
           drawArrow(x2, y2, x1, y1); // both ends
           drawArrow(x1, y1, x2, y2);
         }
+        //ray arrows
         if (obj.type === 'ray') {
           drawArrow(x1, y1, x2, y2);
         }
@@ -509,6 +511,7 @@ export default class GeometryPlugin extends Plugin {
 
     // Draw angles / angle bisectors
     objects.forEach(obj => {
+      //Angles
       if (obj.type === 'angle') {
         const vertex = idMap.get(obj.vertexId ?? '');
         const p1 = idMap.get(obj.p1Id ?? '');
@@ -543,6 +546,7 @@ export default class GeometryPlugin extends Plugin {
         );
       }
 
+      // Angle Bisector
       if (obj.type === 'angleBisector') {
         const angleObj = idMap.get(obj.otherIds?.[0] ?? '');
         if (!angleObj || angleObj.type !== 'angle') return;
