@@ -58,58 +58,32 @@
   /* ✅ Force one clean outer border */
   border: 1px solid var(--text-muted);
 }
-
 .proof-2col th,
 .proof-2col td {
   /* ✅ Force identical borders everywhere */
   border: 1px solid var(--text-muted);
   padding: 6px 10px;
   vertical-align: top;
-
-  /* ✅ Prevent subpixel blur */
   box-sizing: border-box;
 }
-
 .proof-2col th {
   background: var(--background-modifier-hover);
   font-weight: 600;
 }
-
 /* ✅ Locked column widths */
 .proof-2col th:nth-child(1),
 .proof-2col td:nth-child(1) {
   width: 8%;
   text-align: center;
 }
-
 .proof-2col th:nth-child(2),
 .proof-2col td:nth-child(2) {
   width: 56%;
 }
-
 .proof-2col th:nth-child(3),
 .proof-2col td:nth-child(3) {
   width: 36%;
 }
-
-.proof-flow-wrapper {
-  margin: 1em 0;
-}
-
-.proof-flow-canvas {
-  width: 100%;
-  border: 1px solid #444;
-  background: #0f0f0f;
-  border-radius: 8px;
-}
-
-.proof-flow-node {
-  fill: #222;
-  stroke: #666;
-  stroke-width: 2px;
-}
-.proof-flow-node text {
-  fill: #eee;
-  font-size: 14px;
-  font-family: Arial, sans-serif;
+.proof-2col tr:nth-child(even) {
+  background: var(--background-modifier-hover);
 }

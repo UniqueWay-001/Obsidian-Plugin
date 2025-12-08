@@ -13,8 +13,17 @@ interface GeometricObject {
   | 'plane'
   | 'circle'
   | 'angleBisector'
+  | 'transversal'
   ;
-  values: Record<string, number>;
+  // Explicit numeric coordinates
+  values: Record<string, number | string | boolean>;
+  x?: number;
+  y?: number;
+
+  label?: string;
+  showDegrees?: boolean;
+  [key:string]: any;
+
   startId?: string;
   endId?: string;
   centerId?: string;
@@ -25,6 +34,7 @@ interface GeometricObject {
   otherIds?: string[];
   baseId?: string;
   meta?: Record<string, any>;
+  transversalIds?: string[];
 }
 
 
@@ -61,7 +71,9 @@ export default class GeometryPlugin extends Plugin {
       objects.push({
         id,
         type: 'point',
-        values: { x: Number(x), y: Number(y) }
+        x: Number(x),
+        y: Number(y),
+        values: {}
       });
       continue;
     }
@@ -74,8 +86,6 @@ export default class GeometryPlugin extends Plugin {
       objects.push({ id, type: type as any, startId, endId, values: {} });
       continue;
     }
-
-    
 
     // --- Midpoint ---
     // Example: "M1: midpoint A B"
@@ -95,14 +105,27 @@ export default class GeometryPlugin extends Plugin {
       continue;
     }
 
-    // --- Angle ---
-    // Example: "Angle1: angle A B C"
-    match = line.match(/^(\w+):\s*angle\s+(\w+)\s+(\w+)\s+(\w+)/);
-    if (match) {
-      const [, id, vertexId, p1Id, p2Id] = match;
-      objects.push({ id, type: 'angle', vertexId, p1Id, p2Id, values: {} });
-      continue;
-    }
+  // --- Angle (Label or Degree Mode) ---
+  // Examples:
+  // Ang1: angle A B C label=X
+  // Ang2: angle A B C deg
+  match = line.match(/^(\w+):\s*angle\s+(\w+)\s+(\w+)\s+(\w+)(?:\s+(label=([\w\d]+)|deg))?/);
+  if (match) {
+    const [, id, vertexId, p1Id, p2Id, , label] = match;
+    objects.push({
+      id,
+      type: 'angle',
+      vertexId,
+      p1Id,
+      p2Id,
+      values: {
+        label: label ?? id,
+        showDegrees: line.endsWith('deg')
+      }
+    });
+    continue;
+  }
+
 
     // --- Angle Bisector ---
     // Example: "AB1: angleBisector Angle1"
@@ -122,7 +145,21 @@ export default class GeometryPlugin extends Plugin {
       continue;
     }
 
-    
+    // --- Transversal ---
+    // Example: "T1: transversal L1 L2 A B"
+    match = line.match(/^(\w+):\s*transversal\s+(\w+)\s+(\w+)\s+(\w+)\s+(\w+)/);
+    if (match) {
+      const [, id, line1Id, line2Id, startId, endId] = match;
+      objects.push({
+        id,
+        type: 'transversal',
+        otherIds: [line1Id, line2Id],
+        startId,
+        endId,
+        values: {}
+      });
+      continue;
+    }
   }
 
   return objects;
@@ -182,6 +219,9 @@ export default class GeometryPlugin extends Plugin {
         pre.style.display = 'none';
 
         const objects = this.parseGeometryCode(block.textContent || '');
+        if (objects.some(o => o.type === 'transversal')) {
+          canvas.classList.add('has-transversal');
+        }
         // if no points, add a dummy point for testing
         if (objects.length === 0) {
           objects.push({ id: 'A', type: 'point', values: { x: 100, y: 100 } });
@@ -318,15 +358,15 @@ export default class GeometryPlugin extends Plugin {
 
       draggingPoint = objects.find(obj =>
         obj.type === 'point' &&
-        Math.hypot((obj.values.x ?? Infinity) - x, (obj.values.y ?? Infinity) - y) < 12
+        Math.hypot((obj.x ?? Infinity) - x, (obj.y ?? Infinity) - y) < 12
       ) || null;
     };
 
     const mousemove = (e: MouseEvent) => {
       if (!draggingPoint || this.locked) return;
       const rect = canvas.getBoundingClientRect();
-      draggingPoint.values.x = e.clientX - rect.left;
-      draggingPoint.values.y = e.clientY - rect.top;
+      draggingPoint.x = e.clientX - rect.left;
+      draggingPoint.y = e.clientY - rect.top;
 
       this.renderCanvas(canvas, objects);
     };
@@ -397,8 +437,8 @@ export default class GeometryPlugin extends Plugin {
         const p1 = idMap.get(obj.startId ?? '');
         const p2 = idMap.get(obj.endId ?? '');
         if (p1 && p2) {
-          obj.values.x = (p1.values.x + p2.values.x) / 2;
-          obj.values.y = (p1.values.y + p2.values.y) / 2;
+          obj.x = ((p1.x ?? 0) + (p2.x ?? 0)) / 2;
+          obj.y = ((p1.y ?? 0) + (p2.y ?? 0)) / 2;
         }
       }
     });
@@ -421,18 +461,18 @@ export default class GeometryPlugin extends Plugin {
       ctx.fill();
     };
 
-    // Draw lines, segments, rays, bisectors
+    // Draw lines, segments, rays, bisectors, and transversals
     objects.forEach(obj => {
-      if (['line', 'segment', 'ray', 'bisector'].includes(obj.type)) {
+      if (['line', 'segment', 'ray', 'bisector', 'transversal'].includes(obj.type)) {
         const p1 = idMap.get(obj.startId ?? '');
         const p2 = idMap.get(obj.endId ?? '');
         if (!p1 || !p2) return;
-        if (p1.values?.x == null || p2.values?.x == null) return;
+        if (p1.x == null || p2.x == null) return;
 
-        let x1 = p1.values.x;
-        let y1 = p1.values.y;
-        let x2 = p2.values.x;
-        let y2 = p2.values.y;
+        let x1 = p1.x ?? 0;
+        let y1 = p1.y ?? 0;
+        let x2 = p2.x ?? 0;
+        let y2 = p2.y ?? 0;
 
         // ---------- BISECTORS ----------
         if (obj.type === 'bisector') {
@@ -472,9 +512,29 @@ export default class GeometryPlugin extends Plugin {
         ctx.beginPath();
         ctx.moveTo(x1, y1);
         ctx.lineTo(x2, y2);
-        ctx.strokeStyle = obj.type === 'bisector' ? 'cyan' : 'white';
+        ctx.strokeStyle = 
+          obj.type === 'bisector' ? 'cyan' : 
+          obj.type === 'transversal' ? 'magenta' :
+          'white';
         ctx.lineWidth = 2;
         ctx.stroke();
+
+        // ---------- TRANSVERSAL ----------
+        if (obj.type === 'transversal') {
+          const dx = x2 - x1;
+          const dy = y2 - y1;
+          const len = Math.hypot(dx, dy);
+          if (len !== 0) {
+            const ux = dx / len;
+            const uy = dy / len;
+            const extent = Math.max(canvas.width, canvas.height) * 1.5;
+            x1 -= ux * extent;
+            y1 -= uy * extent;
+            x2 += ux * extent;
+            y2 += uy * extent;
+          }
+        }
+
 
         // ---------- DRAW ARROWS ----------
         ctx.fillStyle = ctx.strokeStyle as string;
@@ -509,43 +569,51 @@ export default class GeometryPlugin extends Plugin {
 
 
 
+    if (objects.some(o => o.type === 'angle')) {
+      canvas.classList.add('has-angles');
+    }
+
     // Draw angles / angle bisectors
     objects.forEach(obj => {
-      //Angles
-      if (obj.type === 'angle') {
+      // -------- CLEAN ANGLE LABELS (NO ARCS) --------
+      objects.forEach(obj => {
+        if (obj.type !== 'angle') return;
+
         const vertex = idMap.get(obj.vertexId ?? '');
         const p1 = idMap.get(obj.p1Id ?? '');
         const p2 = idMap.get(obj.p2Id ?? '');
         if (!vertex || !p1 || !p2) return;
 
-        const startAngleOrig = Math.atan2(p1.values.y - vertex.values.y, p1.values.x - vertex.values.x);
-        const endAngleOrig = Math.atan2(p2.values.y - vertex.values.y, p2.values.x - vertex.values.x);
-        let diff = endAngleOrig - startAngleOrig;
-        let startAngle = startAngleOrig;
+        const a1 = Math.atan2((p1.y ?? 0) - (vertex.y ?? 0), (p1.x ?? 0) - (vertex.x ?? 0));
+        const a2 = Math.atan2((p2.y ?? 0) - (vertex.y ?? 0), (p2.x ?? 0) - (vertex.x ?? 0));
+
+        let diff = a2 - a1;
         if (diff < 0) diff += Math.PI * 2;
-        if (diff > Math.PI) {
-          diff = 2 * Math.PI - diff;
-          startAngle = endAngleOrig;
+        if (diff > Math.PI) diff = 2 * Math.PI - diff;
+
+        const mid = (a1 + a2) / 2;
+
+        let text = '';
+
+        if (obj.values.showDegrees) {
+          text = `${Math.round(diff * 180 / Math.PI)}°`;
+        } else if (obj.values.label) {
+          text = String(obj.values.label);
+        } else {
+          text = obj.id;
         }
 
-        const radius = 40;
-        ctx.beginPath();
-        ctx.arc(vertex.values.x, vertex.values.y, radius, startAngle, startAngle + diff);
-        ctx.strokeStyle = 'purple';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-
-        const midAngle = startAngle + diff / 2;
-        ctx.font = '12px Arial';
+        ctx.font = '14px Arial';
         ctx.fillStyle = 'white';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(`${Math.round(diff * 180 / Math.PI)}°`,
-          vertex.values.x + Math.cos(midAngle) * (radius + 15),
-          vertex.values.y + Math.sin(midAngle) * (radius + 15)
-        );
-      }
 
+        ctx.fillText(
+          text,
+          (vertex.x ?? 0) + Math.cos(mid) * 30,
+          (vertex.y ?? 0) + Math.sin(mid) * 30
+        );
+      });
       // Angle Bisector
       if (obj.type === 'angleBisector') {
         const angleObj = idMap.get(obj.otherIds?.[0] ?? '');
@@ -555,20 +623,79 @@ export default class GeometryPlugin extends Plugin {
         const p2 = idMap.get(angleObj.p2Id ?? '');
         if (!vertex || !p1 || !p2) return;
 
-        const dx1 = p1.values.x - vertex.values.x, dy1 = p1.values.y - vertex.values.y;
-        const dx2 = p2.values.x - vertex.values.x, dy2 = p2.values.y - vertex.values.y;
+        const dx1 = (p1.x ?? 0) - (vertex.x ?? 0), dy1 = (p1.y ?? 0) - (vertex.y ?? 0);
+        const dx2 = (p2.x ?? 0) - (vertex.x ?? 0), dy2 = (p2.y ?? 0) - (vertex.y ?? 0);
         let bx = dx1 / Math.hypot(dx1, dy1) + dx2 / Math.hypot(dx2, dy2);
         let by = dy1 / Math.hypot(dx1, dy1) + dy2 / Math.hypot(dx2, dy2);
         const len = Math.hypot(bx, by);
         if (len < 1e-6) { bx = -dy1 / Math.hypot(dx1, dy1); by = dx1 / Math.hypot(dx1, dy1); }
         ctx.beginPath();
-        ctx.moveTo(vertex.values.x, vertex.values.y);
-        ctx.lineTo(vertex.values.x + (bx / len) * 150, vertex.values.y + (by / len) * 150);
+        ctx.moveTo(vertex.x ?? 0, vertex.y ?? 0);
+        ctx.lineTo((vertex.x ?? 0) + (bx / len) * 150, (vertex.y ?? 0) + (by / len) * 150);
         ctx.strokeStyle = 'orange';
         ctx.lineWidth = 2;
         ctx.stroke();
       }
     });
+
+    // ------------------ TRANSVERSAL ANGLE LABELS ------------------
+    objects.forEach(obj => {
+      if (obj.type !== 'transversal') return;
+
+      const lineObj1 = idMap.get(obj.otherIds?.[0] ?? '');
+      const lineObj2 = idMap.get(obj.otherIds?.[1] ?? '');
+      const p1 = idMap.get(obj.startId ?? '');
+      const p2 = idMap.get(obj.endId ?? '');
+
+      if (!lineObj1 || !lineObj2 || !p1 || !p2) return;
+
+      const dx = (p2.x ?? 0) - (p1.x ?? 0);
+      const dy = (p2.y ?? 0) - (p1.y ?? 0);
+
+      const intersections = [lineObj1, lineObj2].map(line => {
+        const a = idMap.get(line.startId ?? '');
+        const b = idMap.get(line.endId ?? '');
+        if (!a || !b) return null;
+
+        const dxa = (b.x ?? 0) - (a.x ?? 0);
+        const dya = (b.y ?? 0) - (a.y ?? 0);
+
+        const det = dx * dya - dy * dxa;
+        if (Math.abs(det) < 1e-6) return null;
+
+        const t =
+          (((a.x ?? 0) - (p1.x ?? 0)) * dya -
+            ((a.y ?? 0) - (p1.y ?? 0)) * dxa) / det;
+
+        return {
+          x: (p1.x ?? 0) + t * dx,
+          y: (p1.y ?? 0) + t * dy
+        };
+      });
+
+      let count = 1;
+      intersections.forEach(pt => {
+        if (!pt) return;
+
+        const offsets = [
+          [20, -20], [20, 20], [-20, 20], [-20, -20]
+        ];
+
+        offsets.forEach(([ox, oy]) => {
+          ctx.fillStyle = 'white';
+          ctx.font = '12px Arial';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(
+            `${count}`,
+            pt.x + ox,
+            pt.y + oy
+          );
+          count++;
+        });
+      });
+    });
+
 
     // Draw circles
     objects.forEach(obj => {
@@ -576,9 +703,9 @@ export default class GeometryPlugin extends Plugin {
         const center = idMap.get(obj.centerId ?? '');
         const point = idMap.get(obj.pointId ?? '');
         if (!center || !point) return;
-        const r = Math.hypot(point.values.x - center.values.x, point.values.y - center.values.y);
+        const r = Math.hypot((point.x ?? 0) - (center.x ?? 0), (point.y ?? 0) - (center.y ?? 0));
         ctx.beginPath();
-        ctx.arc(center.values.x, center.values.y, r, 0, Math.PI * 2);
+        ctx.arc(center.x ?? 0, center.y ?? 0, r, 0, Math.PI * 2);
         ctx.strokeStyle = 'lime';
         ctx.lineWidth = 2;
         ctx.stroke();
@@ -587,9 +714,9 @@ export default class GeometryPlugin extends Plugin {
 
     // Draw points
     objects.forEach(obj => {
-      if (!obj.values?.x || !obj.values?.y) return;
+      if (!obj.x || !obj.y) return;
       ctx.beginPath();
-      ctx.arc(obj.values.x, obj.values.y, 5, 0, Math.PI * 2);
+      ctx.arc(obj.x, obj.y, 5, 0, Math.PI * 2);
       ctx.fillStyle = obj.type === 'midpoint' ? 'orange' : 'yellow';
       ctx.fill();
       ctx.strokeStyle = 'black';
@@ -601,7 +728,7 @@ export default class GeometryPlugin extends Plugin {
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
       const label = obj.id;
-      ctx.fillText(label, obj.values.x + 8, obj.values.y);
+      ctx.fillText(label, obj.x + 8, obj.y);
     });
 
     ctx.restore();
